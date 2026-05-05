@@ -16,7 +16,7 @@ namespace DragonMud
     public class Player
     {
         public string Name { get; set; }
-        public string PasswordHash { get; set; } // Přidáno pro uchování hashe hesla
+        public string PasswordHash { get; set; }
         public string CurrentRoomId { get; set; }
         public StreamWriter Writer { get; set; }
 
@@ -32,7 +32,6 @@ namespace DragonMud
         }
     }
 
-    // Nová třída čistě pro ukládání do JSON souboru (Persistence)
     public class PlayerSaveData
     {
         public string Name { get; set; }

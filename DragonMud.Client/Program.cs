@@ -12,9 +12,7 @@ namespace DragonMud.Client
         {
             Console.Title = "Dragon MUD - Klientská aplikace";
 
-            // Podle zadání by IP a Port měly být v configu klienta, 
-            // pro zjednodušení si je tu teď definujeme rovnou.
-            string serverIp = "127.0.0.1"; // Localhost
+            string serverIp = "127.0.0.1";
             int port = 8888;
 
             Console.WriteLine($"Připojuji se k serveru {serverIp}:{port}...");
@@ -29,12 +27,9 @@ namespace DragonMud.Client
                 using StreamReader reader = new StreamReader(stream, Encoding.UTF8);
                 using StreamWriter writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
 
-                // Spustíme dvě asynchronní úlohy: 
-                // Jedna čte zprávy ze serveru, druhá odesílá příkazy od hráče.
                 Task readTask = ReadFromServerAsync(reader);
                 Task writeTask = WriteToServerAsync(writer);
 
-                // Čekáme, dokud jedna z úloh neskončí (např. server se odpojí)
                 await Task.WhenAny(readTask, writeTask);
             }
             catch (Exception ex)
@@ -63,7 +58,6 @@ namespace DragonMud.Client
             }
             catch
             {
-                // Ignorujeme chyby při násilném odpojení
             }
         }
 
@@ -83,7 +77,6 @@ namespace DragonMud.Client
             }
             catch
             {
-                // Ignorujeme chyby při násilném odpojení
             }
         }
     }

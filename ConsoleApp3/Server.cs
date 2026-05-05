@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
-using System.Threading.Tasks;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace DragonMud
 {
@@ -47,7 +47,6 @@ namespace DragonMud
         private async Task HandleClientAsync(TcpClient client)
         {
             Player currentPlayer = null;
-            string saveFilePath = "";
 
             try
             {
@@ -61,12 +60,10 @@ namespace DragonMud
                 if (string.IsNullOrWhiteSpace(name)) return;
                 name = name.Trim();
 
-                // Zajištění, že složka pro uložení existuje
                 Directory.CreateDirectory("saves");
-                saveFilePath = $"saves/{name.ToLower()}.json";
+                string saveFilePath = $"saves/{name.ToLower()}.json";
                 PlayerSaveData saveData;
 
-                // LOGIKA PŘIHLAŠOVÁNÍ A REGISTRACE
                 if (File.Exists(saveFilePath))
                 {
                     await writer.WriteLineAsync("Ucet nalezen. Zadej heslo:");
@@ -79,7 +76,7 @@ namespace DragonMud
                     if (saveData.PasswordHash != hashedInput)
                     {
                         await writer.WriteLineAsync("Spatne heslo! Spojeni ukonceno.");
-                        return; // Ukončí spojení
+                        return;
                     }
                     await writer.WriteLineAsync("Uspesne prihlasen! Vitej zpet.");
                 }
@@ -100,7 +97,6 @@ namespace DragonMud
                     await writer.WriteLineAsync("Ucet vytvoren. Vitej ve hre!");
                 }
 
-                // Vytvoření hráče v paměti na základě načtených/nových dat
                 currentPlayer = new Player(saveData.Name, writer)
                 {
                     PasswordHash = saveData.PasswordHash,
@@ -115,7 +111,6 @@ namespace DragonMud
 
                 LookAround(currentPlayer);
 
-                // Hlavní herní smyčka
                 while (client.Connected)
                 {
                     string input = await reader.ReadLineAsync();
@@ -134,46 +129,12 @@ namespace DragonMud
                 {
                     _activePlayers.Remove(currentPlayer);
                     Log($"Hráč {currentPlayer.Name} se odpojil.");
-
-                    // ULOŽENÍ STAVU PŘI ODPOJENÍ
-                    SavePlayer(currentPlayer, saveFilePath);
+                    SavePlayer(currentPlayer);
                 }
                 client.Close();
             }
         }
 
-        // Metoda pro bezpečné hashování hesla (bod I3 - hesla nesmí být v čistém textu)
-        private string HashPassword(string password)
-        {
-            using (SHA256 sha256 = SHA256.Create())
-            {
-                byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
-                StringBuilder builder = new StringBuilder();
-                for (int i = 0; i < bytes.Length; i++)
-                {
-                    builder.Append(bytes[i].ToString("x2"));
-                }
-                return builder.ToString();
-            }
-        }
-
-        // Metoda pro uložení stavu hráče do souboru
-        private void SavePlayer(Player player, string filePath)
-        {
-            PlayerSaveData data = new PlayerSaveData
-            {
-                Name = player.Name,
-                PasswordHash = player.PasswordHash,
-                CurrentRoomId = player.CurrentRoomId,
-                HP = player.HP,
-                Attack = player.Attack,
-                Inventory = player.Inventory
-            };
-
-            string json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(filePath, json);
-            Log($"Stav hráče {player.Name} byl úspěšně uložen.");
-        }
         private void ProcessCommand(Player player, string command)
         {
             Log($"[{player.Name}] zadal: {command}");
@@ -183,7 +144,7 @@ namespace DragonMud
 
             if (parts[0] == "pomoc")
             {
-                player.Writer.WriteLine("Příkazy: jdi <směr>, prozkoumej, vezmi <předmět>, utoc <cíl>, inventar, konec");
+                player.Writer.WriteLine("Příkazy: jdi <směr>, prozkoumej, vezmi <předmět>, pouzij <předmět>, utoc <cíl>, inventar, rekni <zprava>, krik <zprava>, uloz, konec");
             }
             else if (parts[0] == "prozkoumej")
             {
@@ -197,13 +158,32 @@ namespace DragonMud
             {
                 TakeItem(player, parts[1]);
             }
+            else if (parts[0] == "pouzij" && parts.Length > 1)
+            {
+                UseItem(player, parts[1]);
+            }
             else if (parts[0] == "inventar" || parts[0] == "i")
             {
                 ShowInventory(player);
             }
             else if (parts[0] == "utoc" && parts.Length > 1)
             {
-                AttackNpc(player, parts[1]);
+                AttackTarget(player, parts[1]);
+            }
+            else if (parts[0] == "rekni" && parts.Length > 1)
+            {
+                string message = command.Substring(command.IndexOf(' ') + 1);
+                Say(player, message);
+            }
+            else if (parts[0] == "krik" && parts.Length > 1)
+            {
+                string message = command.Substring(command.IndexOf(' ') + 1);
+                Shout(player, message);
+            }
+            else if (parts[0] == "uloz")
+            {
+                SavePlayer(player);
+                player.Writer.WriteLine("Hra byla úspěšně uložena.");
             }
             else if (parts[0] == "konec")
             {
@@ -221,9 +201,24 @@ namespace DragonMud
             Room currentRoom = GameWorld.GetRoom(player.CurrentRoomId);
             if (currentRoom != null && currentRoom.Exits.ContainsKey(direction))
             {
-                player.CurrentRoomId = currentRoom.Exits[direction];
+                string oldRoomId = player.CurrentRoomId;
+                string newRoomId = currentRoom.Exits[direction];
+
+                // M11 – Mechanika zamčených místností
+                if (newRoomId == "draci_doupe" && !player.Inventory.Contains("klic_k_drakovi"))
+                {
+                    player.Writer.WriteLine("\n[!] Dveře do doupěte jsou zamčené. Potřebuješ 'klic_k_drakovi'!");
+                    return;
+                }
+
+                NotifyRoom(oldRoomId, player, $"{player.Name} odešel směrem na {direction}.");
+
+                player.CurrentRoomId = newRoomId;
                 player.Writer.WriteLine($"\nJdeš směr: {direction}...");
                 LookAround(player);
+
+                NotifyRoom(newRoomId, player, $"{player.Name} právě přišel.");
+                SavePlayer(player);
             }
             else
             {
@@ -244,6 +239,20 @@ namespace DragonMud
                 player.Writer.WriteLine("Předměty na zemi: " + string.Join(", ", room.Items));
             if (room.Npcs.Count > 0)
                 player.Writer.WriteLine("Postavy zde: " + string.Join(", ", room.Npcs));
+
+            List<string> otherPlayersInRoom = new List<string>();
+            foreach (var p in _activePlayers)
+            {
+                if (p.CurrentRoomId == player.CurrentRoomId && p.Name != player.Name)
+                {
+                    otherPlayersInRoom.Add(p.Name);
+                }
+            }
+
+            if (otherPlayersInRoom.Count > 0)
+            {
+                player.Writer.WriteLine("Ostatní hráči zde: " + string.Join(", ", otherPlayersInRoom));
+            }
         }
 
         private void TakeItem(Player player, string itemName)
@@ -255,10 +264,37 @@ namespace DragonMud
                 room.Items.Remove(itemName);
                 player.Inventory.Add(itemName);
                 player.Writer.WriteLine($"Zvedl jsi ze země: {itemName}");
+                SavePlayer(player);
             }
             else
             {
                 player.Writer.WriteLine("Takový předmět tady není.");
+            }
+        }
+
+        // M8 – Mechanika používání předmětů
+        private void UseItem(Player player, string itemName)
+        {
+            if (!player.Inventory.Contains(itemName))
+            {
+                player.Writer.WriteLine("Takový předmět v inventáři nemáš.");
+                return;
+            }
+
+            if (itemName == "maly_lektvar")
+            {
+                player.HP = Math.Min(100, player.HP + 40);
+                player.Inventory.Remove(itemName);
+                player.Writer.WriteLine($"Vypil jsi lektvar. Tvé zdraví je nyní {player.HP} HP.");
+                SavePlayer(player);
+            }
+            else if (itemName == "klic_k_drakovi")
+            {
+                player.Writer.WriteLine("Tento klíč se používá automaticky u zamčených dveří.");
+            }
+            else
+            {
+                player.Writer.WriteLine("Tento předmět neumíš použít.");
             }
         }
 
@@ -275,47 +311,125 @@ namespace DragonMud
             }
         }
 
-        private void AttackNpc(Player player, string npcName)
+        // M2 & M3 – Mechanika souboje (NPC i Hráči)
+        private void AttackTarget(Player player, string targetName)
         {
             Room room = GameWorld.GetRoom(player.CurrentRoomId);
 
-            if (room != null && room.Npcs.Contains(npcName))
+            // Nejdřív zkusíme, jestli útočí na jiného HRÁČE (M3)
+            Player targetPlayer = _activePlayers.Find(p => p.Name.ToLower() == targetName.ToLower() && p.CurrentRoomId == player.CurrentRoomId);
+
+            if (targetPlayer != null && targetPlayer != player)
             {
-                player.Writer.WriteLine($"Útočíš na {npcName}!");
+                player.Writer.WriteLine($"Útočíš na hráče {targetPlayer.Name}!");
+                targetPlayer.Writer.WriteLine($"\n[!!!] {player.Name} na tebe ZAÚTOČIL!");
 
-                // Zjednodušená bojová logika
+                targetPlayer.HP -= player.Attack;
+                player.HP -= (targetPlayer.Attack / 2); // Protiútok hráče
+
+                player.Writer.WriteLine($"Způsobil jsi mu zranění. Máš {player.HP} HP, on má {targetPlayer.HP} HP.");
+                targetPlayer.Writer.WriteLine($"Ztratil jsi životy. Máš {targetPlayer.HP} HP.");
+
+                if (targetPlayer.HP <= 0)
+                {
+                    targetPlayer.Writer.WriteLine("ZEMŘEL JSI v souboji! Resetuji tvou pozici do krčmy.");
+                    player.Writer.WriteLine($"Porazil jsi hráče {targetPlayer.Name}!");
+                    targetPlayer.HP = 100;
+                    targetPlayer.CurrentRoomId = "krcma_start";
+                }
+                SavePlayer(player);
+                SavePlayer(targetPlayer);
+                return;
+            }
+
+            // Pokud to není hráč, zkusíme NPC (M2)
+            if (room != null && room.Npcs.Contains(targetName))
+            {
+                player.Writer.WriteLine($"Útočíš na {targetName}!");
                 player.HP -= 10;
-                room.Npcs.Remove(npcName);
+                room.Npcs.Remove(targetName);
 
-                // WIN CONDITION - Zabití draka
-                if (npcName.ToLower() == "drak")
+                if (targetName.ToLower() == "drak")
                 {
                     player.Writer.WriteLine("\n===============================================");
                     player.Writer.WriteLine("🎉 GRATULUJI! Zabil jsi prastarého draka!");
                     player.Writer.WriteLine("Získal jsi obrovský poklad a DOKONČIL JSI HRU!");
                     player.Writer.WriteLine("===============================================\n");
-
-                    // Uložení do statistik podle požadavku P1
-                    File.AppendAllText("vyherci.txt", $"[{DateTime.Now:yyyy-MM-dd HH:mm}] Hráč {player.Name} úspěšně porazil draka a dohrál hru!\n");
-
-                    player.Writer.BaseStream.Close(); // Odpojíme hráče (konec hry)
-                    return; // Ukončíme metodu, aby se už nevypsal běžný text o boji
-                }
-
-                // Běžný boj s ostatními monstry (např. goblin)
-                player.Writer.WriteLine($"Porazil jsi {npcName}, ale ztratil jsi 10 HP.");
-                player.Writer.WriteLine($"Zbývá ti {player.HP} HP.");
-
-                if (player.HP <= 0)
-                {
-                    player.Writer.WriteLine("ZEMŘEL JSI! Tvoje cesta končí.");
+                    File.AppendAllText("vyherci.txt", $"[{DateTime.Now:yyyy-MM-dd HH:mm}] Hráč {player.Name} vyhrál!\n");
                     player.Writer.BaseStream.Close();
+                    return;
                 }
+
+                player.Writer.WriteLine($"Porazil jsi {targetName}, ale ztratil jsi 10 HP.");
+                SavePlayer(player);
             }
             else
             {
                 player.Writer.WriteLine("Nikdo takový tu není.");
             }
+        }
+
+        private void Say(Player sender, string message)
+        {
+            sender.Writer.WriteLine($"Říkáš: {message}");
+            foreach (var p in _activePlayers)
+            {
+                if (p.CurrentRoomId == sender.CurrentRoomId && p.Name != sender.Name)
+                {
+                    p.Writer.WriteLine($"\n[{sender.Name} říká]: {message}");
+                }
+            }
+        }
+
+        private void Shout(Player sender, string message)
+        {
+            sender.Writer.WriteLine($"Křičíš: {message}");
+            foreach (var p in _activePlayers)
+            {
+                if (p.Name != sender.Name)
+                {
+                    p.Writer.WriteLine($"\n[{sender.Name} KŘIČÍ]: {message}");
+                }
+            }
+        }
+
+        private void NotifyRoom(string roomId, Player excludePlayer, string message)
+        {
+            foreach (var p in _activePlayers)
+            {
+                if (p.CurrentRoomId == roomId && p.Name != excludePlayer.Name)
+                {
+                    p.Writer.WriteLine($"\n*** {message} ***");
+                }
+            }
+        }
+
+        private string HashPassword(string password)
+        {
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < bytes.Length; i++)
+                    builder.Append(bytes[i].ToString("x2"));
+                return builder.ToString();
+            }
+        }
+
+        private void SavePlayer(Player player)
+        {
+            string filePath = $"saves/{player.Name.ToLower()}.json";
+            Directory.CreateDirectory("saves");
+            PlayerSaveData data = new PlayerSaveData
+            {
+                Name = player.Name,
+                PasswordHash = player.PasswordHash,
+                CurrentRoomId = player.CurrentRoomId,
+                HP = player.HP,
+                Attack = player.Attack,
+                Inventory = player.Inventory
+            };
+            File.WriteAllText(filePath, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
         }
 
         private void Log(string message)
