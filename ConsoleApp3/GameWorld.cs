@@ -13,6 +13,12 @@ namespace DragonMud
         {
             try
             {
+                if (!File.Exists("rooms.json"))
+                {
+                    Console.WriteLine("Soubor rooms.json nenalezen!");
+                    return;
+                }
+
                 string jsonString = File.ReadAllText("rooms.json");
                 var roomList = JsonSerializer.Deserialize<List<Room>>(jsonString);
 

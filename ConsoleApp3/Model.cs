@@ -3,7 +3,6 @@ using System.IO;
 
 namespace DragonMud
 {
-    // Třída pro místnost (odpovídá struktuře v JSONu)
     public class Room
     {
         public string Id { get; set; }
@@ -14,18 +13,21 @@ namespace DragonMud
         public List<string> Npcs { get; set; } = new List<string>();
     }
 
-    // Třída reprezentující připojeného hráče
     public class Player
     {
         public string Name { get; set; }
         public string CurrentRoomId { get; set; }
-        public StreamWriter Writer { get; set; } // Přes toto mu posíláme text
+        public StreamWriter Writer { get; set; }
+
+        public int HP { get; set; } = 100;
+        public int Attack { get; set; } = 15;
+        public List<string> Inventory { get; set; } = new List<string>();
 
         public Player(string name, StreamWriter writer)
         {
             Name = name;
             Writer = writer;
-            CurrentRoomId = "krcma_start"; // Výchozí místnost
+            CurrentRoomId = "krcma_start"; // Zde hráč začíná
         }
     }
 }

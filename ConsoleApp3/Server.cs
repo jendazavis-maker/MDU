@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -23,16 +22,23 @@ namespace DragonMud
 
         public async Task StartAsync()
         {
-            GameWorld.LoadWorld(); // Načteme mapu
+            GameWorld.LoadWorld();
             _listener.Start();
             _isRunning = true;
-            Log("Server byl spuštěn.");
+            Log("Server byl spuštěn na portu " + ((IPEndPoint)_listener.LocalEndpoint).Port);
 
             while (_isRunning)
             {
-                TcpClient client = await _listener.AcceptTcpClientAsync();
-                Log($"Nové připojení z {client.Client.RemoteEndPoint}");
-                _ = HandleClientAsync(client); // Fire and forget
+                try
+                {
+                    TcpClient client = await _listener.AcceptTcpClientAsync();
+                    Log($"Nové připojení z {client.Client.RemoteEndPoint}");
+                    _ = HandleClientAsync(client);
+                }
+                catch (Exception ex)
+                {
+                    Log($"Chyba při přijímání klienta: {ex.Message}");
+                }
             }
         }
 
@@ -45,7 +51,7 @@ namespace DragonMud
                 using StreamReader reader = new StreamReader(stream, Encoding.UTF8);
                 using StreamWriter writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
 
-                await writer.WriteLineAsync("Vitej v Dрачиm Doupeti! Jak se jmenujes hrdino?");
+                await writer.WriteLineAsync("Vitej v Dracim Doupeti! Jak se jmenujes, hrdino?");
                 string name = await reader.ReadLineAsync();
 
                 if (string.IsNullOrWhiteSpace(name)) return;
@@ -54,8 +60,8 @@ namespace DragonMud
                 _activePlayers.Add(currentPlayer);
                 Log($"Hráč {currentPlayer.Name} vstoupil do hry.");
 
-                await writer.WriteLineAsync($"Vitej, {currentPlayer.Name}. Napiš 'pomoc' pro seznam příkazů.");
-                LookAround(currentPlayer); // Rozhlédne se po přihlášení
+                await writer.WriteLineAsync($"\nVitej, {currentPlayer.Name}. Napiš 'pomoc' pro seznam příkazů.");
+                LookAround(currentPlayer);
 
                 while (client.Connected)
                 {
@@ -83,11 +89,13 @@ namespace DragonMud
         private void ProcessCommand(Player player, string command)
         {
             Log($"[{player.Name}] zadal: {command}");
-            string[] parts = command.Split(' ');
+            string[] parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length == 0) return;
 
             if (parts[0] == "pomoc")
             {
-                player.Writer.WriteLine("Příkazy: jdi <směr>, prozkoumej, konec");
+                player.Writer.WriteLine("Příkazy: jdi <směr>, prozkoumej, vezmi <předmět>, utoc <cíl>, inventar, konec");
             }
             else if (parts[0] == "prozkoumej")
             {
@@ -97,10 +105,22 @@ namespace DragonMud
             {
                 MovePlayer(player, parts[1]);
             }
+            else if (parts[0] == "vezmi" && parts.Length > 1)
+            {
+                TakeItem(player, parts[1]);
+            }
+            else if (parts[0] == "inventar" || parts[0] == "i")
+            {
+                ShowInventory(player);
+            }
+            else if (parts[0] == "utoc" && parts.Length > 1)
+            {
+                AttackNpc(player, parts[1]);
+            }
             else if (parts[0] == "konec")
             {
                 player.Writer.WriteLine("Sbohem!");
-                player.Writer.BaseStream.Close(); // Ukončí spojení
+                player.Writer.BaseStream.Close();
             }
             else
             {
@@ -114,7 +134,7 @@ namespace DragonMud
             if (currentRoom != null && currentRoom.Exits.ContainsKey(direction))
             {
                 player.CurrentRoomId = currentRoom.Exits[direction];
-                player.Writer.WriteLine($"Jdeš na {direction}...");
+                player.Writer.WriteLine($"\nJdeš směr: {direction}...");
                 LookAround(player);
             }
             else
@@ -133,9 +153,65 @@ namespace DragonMud
             player.Writer.WriteLine("Východy: " + string.Join(", ", room.Exits.Keys));
 
             if (room.Items.Count > 0)
-                player.Writer.WriteLine("Předměty: " + string.Join(", ", room.Items));
+                player.Writer.WriteLine("Předměty na zemi: " + string.Join(", ", room.Items));
             if (room.Npcs.Count > 0)
-                player.Writer.WriteLine("Postavy: " + string.Join(", ", room.Npcs));
+                player.Writer.WriteLine("Postavy zde: " + string.Join(", ", room.Npcs));
+        }
+
+        private void TakeItem(Player player, string itemName)
+        {
+            Room room = GameWorld.GetRoom(player.CurrentRoomId);
+
+            if (room != null && room.Items.Contains(itemName))
+            {
+                room.Items.Remove(itemName);
+                player.Inventory.Add(itemName);
+                player.Writer.WriteLine($"Zvedl jsi ze země: {itemName}");
+            }
+            else
+            {
+                player.Writer.WriteLine("Takový předmět tady není.");
+            }
+        }
+
+        private void ShowInventory(Player player)
+        {
+            player.Writer.WriteLine($"\n--- INVENTÁŘ ({player.HP} HP) ---");
+            if (player.Inventory.Count == 0)
+            {
+                player.Writer.WriteLine("Máš prázdné kapsy.");
+            }
+            else
+            {
+                player.Writer.WriteLine(string.Join(", ", player.Inventory));
+            }
+        }
+
+        private void AttackNpc(Player player, string npcName)
+        {
+            Room room = GameWorld.GetRoom(player.CurrentRoomId);
+
+            if (room != null && room.Npcs.Contains(npcName))
+            {
+                player.Writer.WriteLine($"Útočíš na {npcName}!");
+
+                // Zjednodušená bojová logika
+                player.HP -= 10;
+                room.Npcs.Remove(npcName);
+
+                player.Writer.WriteLine($"Porazil jsi {npcName}, ale ztratil jsi 10 HP.");
+                player.Writer.WriteLine($"Zbývá ti {player.HP} HP.");
+
+                if (player.HP <= 0)
+                {
+                    player.Writer.WriteLine("ZEMŘEL JSI! Tvoje cesta končí.");
+                    player.Writer.BaseStream.Close();
+                }
+            }
+            else
+            {
+                player.Writer.WriteLine("Nikdo takový tu není.");
+            }
         }
 
         private void Log(string message)
