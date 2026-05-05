@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="ConsoleApp3/ConsoleApp3.csproj" />
+  <Project Path="DragonMud.Client/DragonMud.Client.csproj" Id="2484abed-662c-48ea-b94d-80a210dafc90" />
 </Solution>

@@ -5,6 +5,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace DragonMud
 {
@@ -45,24 +47,75 @@ namespace DragonMud
         private async Task HandleClientAsync(TcpClient client)
         {
             Player currentPlayer = null;
+            string saveFilePath = "";
+
             try
             {
                 using NetworkStream stream = client.GetStream();
                 using StreamReader reader = new StreamReader(stream, Encoding.UTF8);
                 using StreamWriter writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
 
-                await writer.WriteLineAsync("Vitej v Dracim Doupeti! Jak se jmenujes, hrdino?");
+                await writer.WriteLineAsync("Vitej v Dracim Doupeti! Zadej sve jmeno:");
                 string name = await reader.ReadLineAsync();
 
                 if (string.IsNullOrWhiteSpace(name)) return;
+                name = name.Trim();
 
-                currentPlayer = new Player(name.Trim(), writer);
+                // Zajištění, že složka pro uložení existuje
+                Directory.CreateDirectory("saves");
+                saveFilePath = $"saves/{name.ToLower()}.json";
+                PlayerSaveData saveData;
+
+                // LOGIKA PŘIHLAŠOVÁNÍ A REGISTRACE
+                if (File.Exists(saveFilePath))
+                {
+                    await writer.WriteLineAsync("Ucet nalezen. Zadej heslo:");
+                    string password = await reader.ReadLineAsync();
+                    string hashedInput = HashPassword(password);
+
+                    string json = File.ReadAllText(saveFilePath);
+                    saveData = JsonSerializer.Deserialize<PlayerSaveData>(json);
+
+                    if (saveData.PasswordHash != hashedInput)
+                    {
+                        await writer.WriteLineAsync("Spatne heslo! Spojeni ukonceno.");
+                        return; // Ukončí spojení
+                    }
+                    await writer.WriteLineAsync("Uspesne prihlasen! Vitej zpet.");
+                }
+                else
+                {
+                    await writer.WriteLineAsync("Novy hrac! Zadej nove heslo pro vytvoreni uctu:");
+                    string password = await reader.ReadLineAsync();
+
+                    saveData = new PlayerSaveData
+                    {
+                        Name = name,
+                        PasswordHash = HashPassword(password),
+                        CurrentRoomId = "krcma_start",
+                        HP = 100,
+                        Attack = 15,
+                        Inventory = new List<string>()
+                    };
+                    await writer.WriteLineAsync("Ucet vytvoren. Vitej ve hre!");
+                }
+
+                // Vytvoření hráče v paměti na základě načtených/nových dat
+                currentPlayer = new Player(saveData.Name, writer)
+                {
+                    PasswordHash = saveData.PasswordHash,
+                    CurrentRoomId = saveData.CurrentRoomId,
+                    HP = saveData.HP,
+                    Attack = saveData.Attack,
+                    Inventory = saveData.Inventory
+                };
+
                 _activePlayers.Add(currentPlayer);
                 Log($"Hráč {currentPlayer.Name} vstoupil do hry.");
 
-                await writer.WriteLineAsync($"\nVitej, {currentPlayer.Name}. Napiš 'pomoc' pro seznam příkazů.");
                 LookAround(currentPlayer);
 
+                // Hlavní herní smyčka
                 while (client.Connected)
                 {
                     string input = await reader.ReadLineAsync();
@@ -81,11 +134,46 @@ namespace DragonMud
                 {
                     _activePlayers.Remove(currentPlayer);
                     Log($"Hráč {currentPlayer.Name} se odpojil.");
+
+                    // ULOŽENÍ STAVU PŘI ODPOJENÍ
+                    SavePlayer(currentPlayer, saveFilePath);
                 }
                 client.Close();
             }
         }
 
+        // Metoda pro bezpečné hashování hesla (bod I3 - hesla nesmí být v čistém textu)
+        private string HashPassword(string password)
+        {
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < bytes.Length; i++)
+                {
+                    builder.Append(bytes[i].ToString("x2"));
+                }
+                return builder.ToString();
+            }
+        }
+
+        // Metoda pro uložení stavu hráče do souboru
+        private void SavePlayer(Player player, string filePath)
+        {
+            PlayerSaveData data = new PlayerSaveData
+            {
+                Name = player.Name,
+                PasswordHash = player.PasswordHash,
+                CurrentRoomId = player.CurrentRoomId,
+                HP = player.HP,
+                Attack = player.Attack,
+                Inventory = player.Inventory
+            };
+
+            string json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(filePath, json);
+            Log($"Stav hráče {player.Name} byl úspěšně uložen.");
+        }
         private void ProcessCommand(Player player, string command)
         {
             Log($"[{player.Name}] zadal: {command}");
@@ -199,6 +287,22 @@ namespace DragonMud
                 player.HP -= 10;
                 room.Npcs.Remove(npcName);
 
+                // WIN CONDITION - Zabití draka
+                if (npcName.ToLower() == "drak")
+                {
+                    player.Writer.WriteLine("\n===============================================");
+                    player.Writer.WriteLine("🎉 GRATULUJI! Zabil jsi prastarého draka!");
+                    player.Writer.WriteLine("Získal jsi obrovský poklad a DOKONČIL JSI HRU!");
+                    player.Writer.WriteLine("===============================================\n");
+
+                    // Uložení do statistik podle požadavku P1
+                    File.AppendAllText("vyherci.txt", $"[{DateTime.Now:yyyy-MM-dd HH:mm}] Hráč {player.Name} úspěšně porazil draka a dohrál hru!\n");
+
+                    player.Writer.BaseStream.Close(); // Odpojíme hráče (konec hry)
+                    return; // Ukončíme metodu, aby se už nevypsal běžný text o boji
+                }
+
+                // Běžný boj s ostatními monstry (např. goblin)
                 player.Writer.WriteLine($"Porazil jsi {npcName}, ale ztratil jsi 10 HP.");
                 player.Writer.WriteLine($"Zbývá ti {player.HP} HP.");
 
